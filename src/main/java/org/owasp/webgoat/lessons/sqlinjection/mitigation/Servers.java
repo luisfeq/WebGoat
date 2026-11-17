@@ -6,21 +6,36 @@ package org.owasp.webgoat.lessons.sqlinjection.mitigation;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
+import java.util.Map;
 import lombok.AllArgsConstructor;
 import lombok.Getter;
 import lombok.extern.slf4j.Slf4j;
 import org.owasp.webgoat.container.LessonDataSource;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.ResponseBody;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.server.ResponseStatusException;
 
 @RestController
 @RequestMapping("SqlInjectionMitigations/servers")
 @Slf4j
 public class Servers {
+
+  // Lista blanca: ORDER BY no admite parámetros (?), así que solo se aceptan columnas conocidas.
+  // El valor concatenado sale de este mapa, nunca de la entrada del usuario.
+  private static final Map<String, String> SORTABLE_COLUMNS =
+      Map.of(
+          "id", "id",
+          "hostname", "hostname",
+          "ip", "ip",
+          "mac", "mac",
+          "status", "status",
+          "description", "description");
 
   private final LessonDataSource dataSource;
 
@@ -43,6 +58,10 @@ public class Servers {
   @GetMapping(produces = MediaType.APPLICATION_JSON_VALUE)
   @ResponseBody
   public List<Server> sort(@RequestParam String column) throws Exception {
+    String orderBy = SORTABLE_COLUMNS.get(column.toLowerCase(Locale.ROOT));
+    if (orderBy == null) {
+      throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Columna de ordenamiento inválida");
+    }
     List<Server> servers = new ArrayList<>();
 
     try (var connection = dataSource.getConnection()) {
@@ -50,7 +69,7 @@ public class Servers {
           connection.prepareStatement(
               "select id, hostname, ip, mac, status, description from SERVERS where status <> 'out"
                   + " of order' order by "
-                  + column)) {
+                  + orderBy)) {
         try (var rs = statement.executeQuery()) {
           while (rs.next()) {
             Server server =
