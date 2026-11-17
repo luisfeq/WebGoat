@@ -6,12 +6,19 @@ package org.owasp.webgoat.container.users;
 
 import java.security.SecureRandom;
 import java.util.List;
+import java.util.Map;
+import java.util.UUID;
+import java.util.regex.Pattern;
 import lombok.AllArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.owasp.webgoat.container.i18n.PluginMessages;
 import org.owasp.webgoat.container.session.Course;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.access.AccessDeniedException;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.config.annotation.method.configuration.EnableMethodSecurity;
+import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -34,7 +41,11 @@ import org.springframework.web.bind.annotation.RestController;
 @RequestMapping("/service/admin")
 @AllArgsConstructor
 @EnableMethodSecurity
+@Slf4j
 public class AdminController {
+
+  /** Mismo alfabeto que el registro (UserForm): minúsculas, dígitos y guion. */
+  private static final Pattern VALID_USERNAME = Pattern.compile("^[a-z0-9-]{1,45}$");
 
   private static final String CHARS =
       "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#$";
@@ -84,6 +95,9 @@ public class AdminController {
   @GetMapping("/users/{username}")
   @PreAuthorize("hasAuthority('WEBGOAT_ADMIN')")
   public ResponseEntity<UserDetail> userDetail(@PathVariable String username) {
+    if (!isValidUsername(username)) {
+      return ResponseEntity.badRequest().build();
+    }
     WebGoatUser user =
         userService.getAllUsers().stream()
             .filter(u -> u.getUsername().equals(username))
@@ -159,6 +173,9 @@ public class AdminController {
   @PostMapping("/users/{username}/reset-password")
   @PreAuthorize("hasAuthority('WEBGOAT_ADMIN')")
   public ResponseEntity<PasswordResetResponse> resetPassword(@PathVariable String username) {
+    if (!isValidUsername(username)) {
+      return ResponseEntity.badRequest().build();
+    }
     String tempPassword = generateTemporaryPassword();
     try {
       userService.resetPassword(username, tempPassword);
@@ -168,7 +185,31 @@ public class AdminController {
     return ResponseEntity.ok(new PasswordResetResponse(username, tempPassword));
   }
 
+  // ── Error handling ─────────────────────────────────────────────────────────
+
+  /** Deja que Spring Security traduzca la denegación a 403 en lugar de convertirla en 500. */
+  @ExceptionHandler(AccessDeniedException.class)
+  public void rethrowAccessDenied(AccessDeniedException e) {
+    throw e;
+  }
+
+  /**
+   * Cualquier error inesperado responde 500 con un mensaje genérico y un id de correlación. La
+   * traza completa queda solo en el log del servidor.
+   */
+  @ExceptionHandler(RuntimeException.class)
+  public ResponseEntity<Map<String, String>> handleUnexpected(RuntimeException e) {
+    String correlationId = UUID.randomUUID().toString();
+    log.error("evento=admin_error correlationId={}", correlationId, e);
+    return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+        .body(Map.of("error", "Error interno", "correlationId", correlationId));
+  }
+
   // ── Helpers ────────────────────────────────────────────────────────────────
+
+  private static boolean isValidUsername(String username) {
+    return username != null && VALID_USERNAME.matcher(username).matches();
+  }
 
   private static String generateTemporaryPassword() {
     StringBuilder sb = new StringBuilder(TEMP_PASSWORD_LENGTH);
